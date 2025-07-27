@@ -1,0 +1,589 @@
+openapi: 3.1.0
+info:
+  title: Coffee - Men-Only Friend Rating API
+  description: |
+    A production-ready REST API backend for rating and reviewing friends, featuring AWS integration, 
+    face recognition, and comprehensive security measures.
+    
+    ## Features
+    - Men-only registration with face verification
+    - Friend photo upload and verification  
+    - Rating and comment system with text moderation
+    - Secure AWS integration (Rekognition, S3, DynamoDB, Comprehend)
+    - JWT authentication with bcrypt password hashing
+    
+  version: 1.0.0
+  contact:
+    name: Coffee API Support
+  license:
+    name: MIT
+
+servers:
+  - url: https://api.coffee.example.com/dev
+    description: Development server
+  - url: https://api.coffee.example.com/prod 
+    description: Production server
+
+security:
+  - BearerAuth: []
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    Error:
+      type: object
+      required: [error, message]
+      properties:
+        error:
+          type: string
+          example: "VALIDATION_ERROR"
+        message:
+          type: string
+          example: "Invalid input data"
+        details:
+          type: object
+          additionalProperties: true
+
+    RegisterRequest:
+      type: object
+      required: [username, password, selfieKey]
+      properties:
+        username:
+          type: string
+          minLength: 3
+          maxLength: 50
+          example: "johndoe"
+        password:
+          type: string
+          minLength: 8
+          maxLength: 128
+          example: "securePassword123"
+        selfieKey:
+          type: string
+          example: "selfie/abc123.jpg"
+
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          example: "johndoe"
+        password:
+          type: string
+          example: "securePassword123"
+
+    TokenResponse:
+      type: object
+      required: [token, userId]
+      properties:
+        token:
+          type: string
+          example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+        userId:
+          type: string
+          example: "123e4567-e89b-12d3-a456-426614174000"
+
+    PresignRequest:
+      type: object
+      required: [kind]
+      properties:
+        kind:
+          type: string
+          enum: [friend, duo]
+          example: "friend"
+
+    PresignResponse:
+      type: object
+      required: [uploadUrl, fileKey, expiresIn]
+      properties:
+        uploadUrl:
+          type: string
+          format: uri
+          example: "https://s3.amazonaws.com/bucket/presigned-url"
+        fileKey:
+          type: string
+          example: "friend/abc123.jpg"
+        expiresIn:
+          type: integer
+          example: 900
+
+    VerifyRequest:
+      type: object
+      required: [friendPhotoKey, duoPhotoKey, friendName, friendCity]
+      properties:
+        friendPhotoKey:
+          type: string
+          example: "friend/abc123.jpg"
+        duoPhotoKey:
+          type: string
+          example: "duo/def456.jpg"
+        friendName:
+          type: string
+          minLength: 1
+          maxLength: 100
+          example: "John Smith"
+        friendCity:
+          type: string
+          minLength: 1
+          maxLength: 100
+          example: "New York"
+
+    VerifyResponse:
+      type: object
+      required: [friendId]
+      properties:
+        friendId:
+          type: string
+          example: "123e4567-e89b-12d3-a456-426614174000"
+
+    RateRequest:
+      type: object
+      required: [score, comment]
+      properties:
+        score:
+          type: integer
+          minimum: 1
+          maximum: 10
+          example: 8
+        comment:
+          type: string
+          maxLength: 250
+          example: "Great guy, very friendly!"
+
+    RateResponse:
+      type: object
+      required: [ratingId]
+      properties:
+        ratingId:
+          type: string
+          example: "123e4567-e89b-12d3-a456-426614174000"
+
+    FriendSearchItem:
+      type: object
+      required: [friendId, name, city, avgRating, numRatings, thumbnailKey]
+      properties:
+        friendId:
+          type: string
+          example: "123e4567-e89b-12d3-a456-426614174000"
+        name:
+          type: string
+          example: "John Smith"
+        city:
+          type: string
+          example: "New York"
+        avgRating:
+          type: number
+          format: float
+          example: 8.4
+        numRatings:
+          type: integer
+          example: 5
+        thumbnailKey:
+          type: string
+          example: "friend/abc123.jpg"
+
+    SearchResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/FriendSearchItem'
+        nextCursor:
+          type: string
+          nullable: true
+          example: "eyJQSyI6IkZSSUVORCMxMjMiLCJTSyI6Ik1FVEFEQVRBISJ9"
+
+    Rating:
+      type: object
+      required: [userId, score, comment, created]
+      properties:
+        userId:
+          type: string
+          example: "123e4567-e89b-12d3-a456-426614174000"
+        score:
+          type: integer
+          example: 9
+        comment:
+          type: string
+          example: "Excellent person!"
+        created:
+          type: string
+          format: date-time
+          example: "2025-07-27T14:35:00Z"
+
+    FriendProfile:
+      type: object
+      required: [friendId, name, city, photos, avgRating, numRatings, ratings]
+      properties:
+        friendId:
+          type: string
+          example: "123e4567-e89b-12d3-a456-426614174000"
+        name:
+          type: string
+          example: "John Smith"
+        city:
+          type: string
+          example: "New York"
+        photos:
+          type: array
+          items:
+            type: string
+          example: ["friend/abc123.jpg", "duo/def456.jpg"]
+        avgRating:
+          type: number
+          format: float
+          example: 8.4
+        numRatings:
+          type: integer
+          example: 5
+        ratings:
+          type: array
+          items:
+            $ref: '#/components/schemas/Rating'
+
+    FriendPhotosResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            type: string
+          example: ["friend/abc123.jpg", "duo/def456.jpg"]
+        nextCursor:
+          type: string
+          nullable: true
+          example: "eyJQSyI6IkZSSUVORCMxMjMiLCJTSyI6IlBIT1RPIyJ9"
+
+    UserProfile:
+      type: object
+      required: [userId, username, created, ratings]
+      properties:
+        userId:
+          type: string
+          example: "123e4567-e89b-12d3-a456-426614174000"
+        username:
+          type: string
+          example: "johndoe"
+        created:
+          type: string
+          format: date-time
+          example: "2025-07-27T14:20:00Z"
+        ratings:
+          type: integer
+          example: 12
+
+    HealthResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          example: "ok"
+
+paths:
+  /auth/register:
+    post:
+      tags: [Authentication]
+      summary: Register a new user
+      description: Register a new user with men-only verification using face recognition
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: User registered successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '400':
+          description: Invalid gender or validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Username already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /auth/login:
+    post:
+      tags: [Authentication]
+      summary: Login user
+      description: Authenticate user and return JWT token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '401':
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /uploads/presign:
+    post:
+      tags: [Uploads]
+      summary: Get presigned upload URL
+      description: Generate a presigned S3 URL for secure file upload
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PresignRequest'
+      responses:
+        '200':
+          description: Presigned URL generated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PresignResponse'
+        '400':
+          description: Invalid upload kind
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /friends/verify:
+    post:
+      tags: [Friends]
+      summary: Verify friend photos
+      description: Verify photos using face recognition and create/link friend record
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerifyRequest'
+      responses:
+        '201':
+          description: Friend verified successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerifyResponse'
+        '400':
+          description: Face verification failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /friends/{friendId}/rate:
+    post:
+      tags: [Friends]
+      summary: Rate a friend
+      description: Add a rating and comment for a friend with text moderation
+      parameters:
+        - name: friendId
+          in: path
+          required: true
+          schema:
+            type: string
+          example: "123e4567-e89b-12d3-a456-426614174000"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RateRequest'
+      responses:
+        '201':
+          description: Rating added successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RateResponse'
+        '400':
+          description: Inappropriate content or validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Friend not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /friends/search:
+    get:
+      tags: [Friends]
+      summary: Search friends
+      description: Search friends by name and city with pagination
+      security: []
+      parameters:
+        - name: name
+          in: query
+          schema:
+            type: string
+          example: "John"
+        - name: city
+          in: query
+          schema:
+            type: string
+          example: "New York"
+        - name: cursor
+          in: query
+          schema:
+            type: string
+          example: "eyJQSyI6IkZSSUVORCMxMjMiLCJTSyI6Ik1FVEFEQVRBISJ9"
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchResponse'
+
+  /friends/{friendId}:
+    get:
+      tags: [Friends]
+      summary: Get friend profile
+      description: Get complete friend profile with ratings
+      security: []
+      parameters:
+        - name: friendId
+          in: path
+          required: true
+          schema:
+            type: string
+          example: "123e4567-e89b-12d3-a456-426614174000"
+      responses:
+        '200':
+          description: Friend profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FriendProfile'
+        '404':
+          description: Friend not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /friends/{friendId}/photos:
+    get:
+      tags: [Friends]
+      summary: Get friend photos
+      description: Get paginated photos for a friend
+      security: []
+      parameters:
+        - name: friendId
+          in: path
+          required: true
+          schema:
+            type: string
+          example: "123e4567-e89b-12d3-a456-426614174000"
+        - name: cursor
+          in: query
+          schema:
+            type: string
+          example: "eyJQSyI6IkZSSUVORCMxMjMiLCJTSyI6IlBIT1RPIyJ9"
+      responses:
+        '200':
+          description: Friend photos
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FriendPhotosResponse'
+        '404':
+          description: Friend not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /me:
+    get:
+      tags: [User]
+      summary: Get user profile
+      description: Get current user's profile information
+      responses:
+        '200':
+          description: User profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /health:
+    get:
+      tags: [System]
+      summary: Health check
+      description: Check if the API is healthy
+      security: []
+      responses:
+        '200':
+          description: API is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+tags:
+  - name: Authentication
+    description: User registration and login
+  - name: Uploads
+    description: File upload operations
+  - name: Friends
+    description: Friend management and rating
+  - name: User
+    description: User profile operations
+  - name: System
+    description: System health and status
