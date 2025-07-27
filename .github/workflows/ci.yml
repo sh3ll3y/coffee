@@ -1,0 +1,190 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ develop, master ]
+  pull_request:
+    branches: [ master ]
+
+env:
+  AWS_REGION: us-east-1
+  SAM_CLI_VERSION: 1.104.0
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: [3.12]
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Run linting
+      run: |
+        black --check src/ tests/
+        isort --check-only src/ tests/
+        flake8 src/ tests/
+        mypy src/
+
+    - name: Run tests
+      run: |
+        pytest tests/ -v --tb=short
+
+  build:
+    name: Build and Deploy
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/master'
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v4
+      with:
+        python-version: 3.12
+
+    - name: Set up SAM CLI
+      uses: aws-actions/setup-sam@v2
+      with:
+        version: ${{ env.SAM_CLI_VERSION }}
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Cache SAM build
+      uses: actions/cache@v3
+      with:
+        path: .aws-sam
+        key: ${{ runner.os }}-sam-${{ hashFiles('template.yaml') }}
+        restore-keys: |
+          ${{ runner.os }}-sam-
+
+    - name: SAM build
+      run: |
+        sam build --use-container
+
+    - name: SAM deploy to dev
+      if: github.ref == 'refs/heads/develop'
+      run: |
+        sam deploy \
+          --no-confirm-changeset \
+          --no-fail-on-empty-changeset \
+          --stack-name coffee-dev \
+          --s3-bucket ${{ secrets.SAM_DEPLOYMENT_BUCKET }} \
+          --capabilities CAPABILITY_IAM \
+          --region ${{ env.AWS_REGION }} \
+          --parameter-overrides \
+            Stage=dev \
+            JWTSecretKey=${{ secrets.JWT_SECRET_KEY_DEV }}
+
+    - name: SAM deploy to production (manual approval)
+      if: github.ref == 'refs/heads/master'
+      uses: trstringer/manual-approval@v1
+      with:
+        secret: ${{ github.TOKEN }}
+        approvers: ${{ github.repository_owner }}
+        minimum-approvals: 1
+        issue-title: "Deploy Coffee Backend to Production"
+        issue-body: |
+          Please review the changes and approve deployment to production.
+          
+          **Changes in this release:**
+          ${{ github.event.head_commit.message }}
+          
+          **Deployment Details:**
+          - Branch: ${{ github.ref }}
+          - Commit: ${{ github.sha }}
+          - Author: ${{ github.actor }}
+
+    - name: SAM deploy to production
+      if: github.ref == 'refs/heads/master'
+      run: |
+        sam deploy \
+          --no-confirm-changeset \
+          --no-fail-on-empty-changeset \
+          --stack-name coffee-prod \
+          --s3-bucket ${{ secrets.SAM_DEPLOYMENT_BUCKET }} \
+          --capabilities CAPABILITY_IAM \
+          --region ${{ env.AWS_REGION }} \
+          --parameter-overrides \
+            Stage=prod \
+            JWTSecretKey=${{ secrets.JWT_SECRET_KEY_PROD }}
+
+    - name: Run integration tests
+      if: github.ref == 'refs/heads/develop'
+      run: |
+        # Get API endpoint from CloudFormation stack
+        API_URL=$(aws cloudformation describe-stacks \
+          --stack-name coffee-dev \
+          --query 'Stacks[0].Outputs[?OutputKey==`CoffeeApiUrl`].OutputValue' \
+          --output text)
+        
+        # Basic health check
+        curl -f "$API_URL/health" || exit 1
+        
+        echo "Integration tests passed!"
+
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v4
+      with:
+        python-version: 3.12
+
+    - name: Install security tools
+      run: |
+        python -m pip install --upgrade pip
+        pip install bandit safety
+
+    - name: Run Bandit security scan
+      run: |
+        bandit -r src/ -f json -o bandit-report.json || true
+        bandit -r src/ -ll
+
+    - name: Check for known vulnerabilities
+      run: |
+        safety check --json --output safety-report.json || true
+        safety check
+
+    - name: Upload security reports
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: security-reports
+        path: |
+          bandit-report.json
+          safety-report.json
