@@ -1,0 +1,242 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Coffee - Men-Only Friend Rating Backend
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 512
+    Runtime: python3.12
+    Environment:
+      Variables:
+        DYNAMODB_TABLE_NAME: !Ref CoffeeTable
+        S3_BUCKET_NAME: !Ref CoffeeUploads
+        REKOGNITION_COLLECTION_ID: coffee-faces
+        AWS_REGION: !Ref AWS::Region
+
+Parameters:
+  Stage:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Deployment stage
+  
+  JWTSecretKey:
+    Type: String
+    NoEcho: true
+    Description: JWT secret key for token signing
+    MinLength: 32
+
+Resources:
+  # API Gateway
+  CoffeeApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub coffee-api-${Stage}
+      StageName: !Ref Stage
+      Cors:
+        AllowMethods: "'GET,POST,OPTIONS'"
+        AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+        AllowOrigin: "'*'"
+      Auth:
+        DefaultAuthorizer: AWS_IAM
+        InvokeRole: CALLER_CREDENTIALS
+      TracingConfig:
+        Mode: Active
+      AccessLogSetting:
+        DestinationArn: !GetAtt ApiGatewayLogGroup.Arn
+        Format: >
+          {
+            "requestId": "$context.requestId",
+            "requestTime": "$context.requestTime",
+            "httpMethod": "$context.httpMethod",
+            "resourcePath": "$context.resourcePath",
+            "status": "$context.status",
+            "responseLength": "$context.responseLength",
+            "responseTime": "$context.responseTime"
+          }
+
+  # Lambda Function
+  CoffeeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub coffee-backend-${Stage}
+      CodeUri: src/
+      Handler: app.lambda_handler
+      Environment:
+        Variables:
+          JWT_SECRET_KEY: !Ref JWTSecretKey
+          FLASK_ENV: production
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref CoffeeTable
+        - S3CrudPolicy:
+            BucketName: !Ref CoffeeUploads
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - rekognition:DetectFaces
+                - rekognition:CompareFaces
+                - rekognition:SearchFaces
+                - rekognition:SearchFacesByImage
+                - rekognition:IndexFaces
+                - rekognition:DeleteFaces
+                - rekognition:CreateCollection
+                - rekognition:DescribeCollection
+              Resource: '*'
+            - Effect: Allow
+              Action:
+                - comprehend:DetectSentiment
+                - comprehend:DetectKeyPhrases
+                - comprehend:DetectPiiEntities
+              Resource: '*'
+            - Effect: Allow
+              Action:
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+              Resource: '*'
+            - Effect: Allow
+              Action:
+                - xray:PutTraceSegments
+                - xray:PutTelemetryRecords
+              Resource: '*'
+      Events:
+        CoffeeApiProxy:
+          Type: Api
+          Properties:
+            RestApiId: !Ref CoffeeApi
+            Path: /{proxy+}
+            Method: ANY
+      Tracing: Active
+
+  # DynamoDB Table
+  CoffeeTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub coffee-table-${Stage}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+        - AttributeName: username
+          AttributeType: S
+        - AttributeName: name_city
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: username-index
+          KeySchema:
+            - AttributeName: username
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+        - IndexName: name_city-index
+          KeySchema:
+            - AttributeName: name_city
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+
+  # S3 Bucket for uploads
+  CoffeeUploads:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub coffee-uploads-${Stage}-${AWS::AccountId}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteIncompleteMultipartUploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 1
+          - Id: DeleteOldVersions
+            Status: Enabled
+            NoncurrentVersionExpirationInDays: 30
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders: ['*']
+            AllowedMethods: [GET, PUT, POST]
+            AllowedOrigins: ['*']
+            MaxAge: 3000
+
+  # CloudWatch Log Groups
+  ApiGatewayLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/apigateway/coffee-api-${Stage}
+      RetentionInDays: 14
+
+  LambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/coffee-backend-${Stage}
+      RetentionInDays: 14
+
+  # IAM Role for API Gateway CloudWatch Logs
+  ApiGatewayCloudWatchRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: apigateway.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs
+
+  # API Gateway Account (for CloudWatch integration)
+  ApiGatewayAccount:
+    Type: AWS::ApiGateway::Account
+    Properties:
+      CloudWatchRoleArn: !GetAtt ApiGatewayCloudWatchRole.Arn
+
+Outputs:
+  CoffeeApiUrl:
+    Description: API Gateway endpoint URL
+    Value: !Sub 'https://${CoffeeApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}'
+    Export:
+      Name: !Sub ${AWS::StackName}-api-url
+
+  CoffeeTableName:
+    Description: DynamoDB table name
+    Value: !Ref CoffeeTable
+    Export:
+      Name: !Sub ${AWS::StackName}-table-name
+
+  CoffeeBucketName:
+    Description: S3 bucket name
+    Value: !Ref CoffeeUploads
+    Export:
+      Name: !Sub ${AWS::StackName}-bucket-name
+
+  CoffeeFunctionName:
+    Description: Lambda function name
+    Value: !Ref CoffeeFunction
+    Export:
+      Name: !Sub ${AWS::StackName}-function-name

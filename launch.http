@@ -1,0 +1,183 @@
+# Coffee API Test Collection
+# Use with VS Code REST Client extension
+# Replace {{baseUrl}} with your actual API URL
+
+@baseUrl = https://abc123.execute-api.us-east-1.amazonaws.com/dev
+@contentType = application/json
+
+### Variables (replace with actual values)
+@token = your-jwt-token-here
+@friendId = your-friend-id-here
+
+###############################################
+# HEALTH CHECK
+###############################################
+
+### Health Check
+GET {{baseUrl}}/health
+
+###############################################
+# AUTHENTICATION
+###############################################
+
+### Register User (Men-only)
+POST {{baseUrl}}/auth/register
+Content-Type: {{contentType}}
+
+{
+  "username": "testuser",
+  "password": "securePassword123",
+  "selfieKey": "selfie/test-selfie.jpg"
+}
+
+### Login User
+POST {{baseUrl}}/auth/login
+Content-Type: {{contentType}}
+
+{
+  "username": "testuser", 
+  "password": "securePassword123"
+}
+
+###############################################
+# UPLOADS
+###############################################
+
+### Get Presigned URL for Friend Photo
+POST {{baseUrl}}/uploads/presign
+Content-Type: {{contentType}}
+Authorization: Bearer {{token}}
+
+{
+  "kind": "friend"
+}
+
+### Get Presigned URL for Duo Photo
+POST {{baseUrl}}/uploads/presign
+Content-Type: {{contentType}}
+Authorization: Bearer {{token}}
+
+{
+  "kind": "duo"
+}
+
+###############################################
+# FRIENDS
+###############################################
+
+### Verify Friend Photos
+POST {{baseUrl}}/friends/verify
+Content-Type: {{contentType}}
+Authorization: Bearer {{token}}
+
+{
+  "friendPhotoKey": "friend/test-friend.jpg",
+  "duoPhotoKey": "duo/test-duo.jpg",
+  "friendName": "John Smith",
+  "friendCity": "New York"
+}
+
+### Rate a Friend
+POST {{baseUrl}}/friends/{{friendId}}/rate
+Content-Type: {{contentType}}
+Authorization: Bearer {{token}}
+
+{
+  "score": 8,
+  "comment": "Great guy, very friendly and helpful!"
+}
+
+### Search Friends by Name
+GET {{baseUrl}}/friends/search?name=John
+
+### Search Friends by City
+GET {{baseUrl}}/friends/search?city=New York
+
+### Search Friends by Name and City
+GET {{baseUrl}}/friends/search?name=John&city=New York
+
+### Search Friends with Pagination
+GET {{baseUrl}}/friends/search?cursor=eyJQSyI6IkZSSUVORCMxMjMiLCJTSyI6Ik1FVEFEQVRBISJ9
+
+### Get Friend Profile
+GET {{baseUrl}}/friends/{{friendId}}
+
+### Get Friend Photos
+GET {{baseUrl}}/friends/{{friendId}}/photos
+
+### Get Friend Photos with Pagination
+GET {{baseUrl}}/friends/{{friendId}}/photos?cursor=eyJQSyI6IkZSSUVORCMxMjMiLCJTSyI6IlBIT1RPIyJ9
+
+###############################################
+# USER PROFILE
+###############################################
+
+### Get Current User Profile
+GET {{baseUrl}}/me
+Authorization: Bearer {{token}}
+
+###############################################
+# EXAMPLE WORKFLOW
+###############################################
+
+### 1. Register a new user
+# POST {{baseUrl}}/auth/register
+# Save the returned token
+
+### 2. Get presigned URL for selfie upload (during registration)
+# Use the presigned URL to upload selfie to S3
+
+### 3. Get presigned URLs for friend photos
+# POST {{baseUrl}}/uploads/presign with kind: "friend"
+# POST {{baseUrl}}/uploads/presign with kind: "duo"
+
+### 4. Upload photos to S3 using presigned URLs
+# Use POST/PUT to the presigned URL with image data
+
+### 5. Verify friend with uploaded photos
+# POST {{baseUrl}}/friends/verify with the S3 keys
+
+### 6. Rate the friend
+# POST {{baseUrl}}/friends/{friendId}/rate
+
+### 7. Search for friends
+# GET {{baseUrl}}/friends/search
+
+###############################################
+# ERROR SCENARIOS
+###############################################
+
+### Try to access protected endpoint without auth
+GET {{baseUrl}}/me
+
+### Try to register with existing username
+POST {{baseUrl}}/auth/register
+Content-Type: {{contentType}}
+
+{
+  "username": "testuser",
+  "password": "anotherPassword123", 
+  "selfieKey": "selfie/another-selfie.jpg"
+}
+
+### Try to login with wrong password
+POST {{baseUrl}}/auth/login
+Content-Type: {{contentType}}
+
+{
+  "username": "testuser",
+  "password": "wrongPassword"
+}
+
+### Try to rate with inappropriate comment
+POST {{baseUrl}}/friends/{{friendId}}/rate
+Content-Type: {{contentType}}
+Authorization: Bearer {{token}}
+
+{
+  "score": 1,
+  "comment": "This guy is terrible and stupid!"
+}
+
+### Try to access non-existent friend
+GET {{baseUrl}}/friends/non-existent-id
